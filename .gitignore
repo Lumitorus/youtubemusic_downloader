@@ -1,0 +1,26 @@
+# Папки с загруженной музыкой
+Music/
+music/
+old/
+
+# Логи
+*.log
+download.log
+
+# Node.js
+node_modules/
+package-lock.json
+
+# Временные файлы
+*.tmp
+*.temp
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ОС
+Thumbs.db
