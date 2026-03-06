@@ -2,6 +2,10 @@
 
 Загрузчик дискографии артистов с YouTube для интеграции с Lidarr.
 
+Советую использовать вместе с https://github.com/Lumitorus/yandexmusic_exporter.
+
+За питон реализацию спасибо: https://github.com/YMusicExport/YandexMusicExport
+
 **Особенности:**
 - ✅ Автоматический поиск Topic-каналов YouTube Music
 - ✅ Загрузка альбомов с обложками
