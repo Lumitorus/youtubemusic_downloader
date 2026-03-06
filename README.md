@@ -25,7 +25,7 @@ choco install nodejs ffmpeg yt-dlp
 # Или установить вручную:
 # 1. Node.js: https://nodejs.org/
 # 2. FFmpeg: https://ffmpeg.org/download.html
-# 3. yt-dlp: pip install yt-dlp
+# 3. yt-dlp: https://github.com/yt-dlp/yt-dlp/releases
 ```
 
 ## Конфигурация
@@ -179,11 +179,9 @@ choco install ffmpeg
 
 ### ❌ "yt-dlp not found"
 
-**Решение**: Установить yt-dlp:
+**Решение**: Установить yt-dlp через Chocolatey:
 
 ```bash
-pip install --upgrade yt-dlp
-# Или через Chocolatey:
 choco install yt-dlp
 ```
 
