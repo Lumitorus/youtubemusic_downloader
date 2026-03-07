@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { execSync, spawn } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
 const https = require('https');
 
 function stripJsonComments(input) {
@@ -107,6 +107,57 @@ class Logger {
 
 const logger = new Logger(config.logging.logFile);
 
+function toPositiveNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function getYtDlpRuntimeOptions() {
+  const opts = config.ytDlpOptions || {};
+  return {
+    quiet: opts.quiet !== false,
+    noWarnings: opts.noWarnings !== false,
+    socketTimeout: toPositiveNumber(opts.socketTimeout) || 30,
+    ignoreErrors: opts.ignoreErrors === true || opts.ignoreerrors === true,
+    sleepRequests: toPositiveNumber(opts.sleepRequests),
+    sleepInterval: toPositiveNumber(opts.sleepInterval),
+    maxSleepInterval: toPositiveNumber(opts.maxSleepInterval),
+    retries: toPositiveNumber(opts.retries),
+    extractorRetries: toPositiveNumber(opts.extractorRetries),
+    retrySleep: toPositiveNumber(opts.retrySleep)
+  };
+}
+
+function buildYtDlpCommonArgs() {
+  const opts = getYtDlpRuntimeOptions();
+  const args = [];
+
+  if (opts.quiet) args.push('--quiet');
+  if (opts.noWarnings) args.push('--no-warnings');
+  if (opts.ignoreErrors) args.push('--ignore-errors');
+  if (opts.socketTimeout) args.push('--socket-timeout', String(opts.socketTimeout));
+  if (opts.sleepRequests) args.push('--sleep-requests', String(opts.sleepRequests));
+  if (opts.sleepInterval) args.push('--sleep-interval', String(opts.sleepInterval));
+  if (opts.maxSleepInterval) args.push('--max-sleep-interval', String(opts.maxSleepInterval));
+  if (opts.retries) args.push('--retries', String(opts.retries));
+  if (opts.extractorRetries) args.push('--extractor-retries', String(opts.extractorRetries));
+  if (opts.retrySleep) args.push('--retry-sleep', String(opts.retrySleep));
+
+  return args;
+}
+
+function runYtDlpFlatJson(target) {
+  const args = [
+    ...buildYtDlpCommonArgs(),
+    '--flat-playlist',
+    '--skip-download',
+    '-j',
+    target
+  ];
+
+  return execFileSync('yt-dlp', args, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+}
+
 /**
  * Заменяет недопустимые символы в путях Windows
  */
@@ -120,10 +171,9 @@ function sanitizePath(name) {
  */
 async function findTopicChannelId(artistName) {
   const query = `ytsearch10:${artistName} topic`;
-  const ytDlpCmd = `yt-dlp --quiet --no-warnings --flat-playlist --skip-download -j "${query}"`;
 
   try {
-    const output = execSync(ytDlpCmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+    const output = runYtDlpFlatJson(query);
     const entries = output.split('\n').filter(line => line.trim()).map(line => JSON.parse(line));
 
     const artistLower = artistName.toLowerCase().trim();
@@ -194,10 +244,9 @@ async function findTopicChannelId(artistName) {
  */
 async function collectReleasePlaylistsUrls(channelId) {
   const releasesUrl = `https://www.youtube.com/channel/${channelId}/releases`;
-  const ytDlpCmd = `yt-dlp --quiet --no-warnings --flat-playlist --skip-download -j "${releasesUrl}"`;
 
   try {
-    const output = execSync(ytDlpCmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+    const output = runYtDlpFlatJson(releasesUrl);
     const entries = output.split('\n').filter(line => line.trim()).map(line => JSON.parse(line));
 
     const urls = [];
@@ -223,10 +272,9 @@ async function collectReleasePlaylistsUrls(channelId) {
  */
 async function collectPlaylistTabUrls(channelId) {
   const playlistsUrl = `https://www.youtube.com/channel/${channelId}/playlists`;
-  const ytDlpCmd = `yt-dlp --quiet --no-warnings --flat-playlist --skip-download -j "${playlistsUrl}"`;
 
   try {
-    const output = execSync(ytDlpCmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+    const output = runYtDlpFlatJson(playlistsUrl);
     const entries = output.split('\n').filter(line => line.trim()).map(line => JSON.parse(line));
 
     const urls = [];
@@ -255,10 +303,9 @@ async function collectPlaylistTabUrls(channelId) {
  */
 async function collectAlbumPlaylistsBySearch(artistName) {
   const query = `ytsearch40:${artistName} full album topic`;
-  const ytDlpCmd = `yt-dlp --quiet --no-warnings --flat-playlist --skip-download -j "${query}"`;
 
   try {
-    const output = execSync(ytDlpCmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+    const output = runYtDlpFlatJson(query);
     const entries = output.split('\n').filter(line => line.trim()).map(line => JSON.parse(line));
 
     const urls = [];
@@ -299,10 +346,8 @@ async function collectAlbumPlaylistsBySearch(artistName) {
  * Загружает обложку плейлиста
  */
 async function downloadPlaylistCover(playlistUrl, albumDir) {
-  const ytDlpCmd = `yt-dlp --quiet --no-warnings --flat-playlist --skip-download -j "${playlistUrl}"`;
-
   try {
-    const output = execSync(ytDlpCmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+    const output = runYtDlpFlatJson(playlistUrl);
     const info = JSON.parse(output.split('\n')[0]);
 
     const thumbnails = info.thumbnails || [];
@@ -360,22 +405,22 @@ async function downloadPlaylistUrls(artistName, playlistUrls) {
     .join('&');
 
   const ytDlpArgs = [
+    ...buildYtDlpCommonArgs(),
     '--format', 'bestaudio/best',
     '--yes-playlist',
-    '--ignore-errors',
-    '--socket-timeout', '30',
     '-o', path.join(baseDir, '%(playlist_title,album|Singles)s/%(playlist_index,autonumber)02d - %(title)s.%(ext)s'),
     '--extract-audio',
     '--audio-format', config.audioFormat,
     '--audio-quality', config.audioQuality,
     '--add-metadata',
-    '--parse-metadata', `${artistName}:%(artist)s`,
-    ...playlistUrls
+    '--parse-metadata', `${artistName}:%(artist)s`
   ];
 
   if (matchFilter) {
-    ytDlpArgs.splice(6, 0, '--match-filter', matchFilter);
+    ytDlpArgs.push('--match-filter', matchFilter);
   }
+
+  ytDlpArgs.push(...playlistUrls);
 
   return new Promise((resolve) => {
     const proc = spawn('yt-dlp', ytDlpArgs);
@@ -400,35 +445,67 @@ async function downloadPlaylistUrls(artistName, playlistUrls) {
 }
 
 /**
- * Проверяет, был ли исполнитель уже скачан
+ * Проверяет, есть ли в папке альбома аудиофайлы
  */
-function isArtistAlreadyDownloaded(artistName) {
-  const safeArtist = sanitizePath(artistName);
-  const artistDir = path.join(config.outputDir, safeArtist);
-  
-  if (!fs.existsSync(artistDir)) {
+function hasAudioFilesInDir(dirPath) {
+  if (!fs.existsSync(dirPath)) {
     return false;
   }
-  
-  // Проверяем, есть ли в папке хотя бы одна папка альбома с файлами
+
   try {
-    const items = fs.readdirSync(artistDir);
-    for (const item of items) {
-      const itemPath = path.join(artistDir, item);
-      const stat = fs.statSync(itemPath);
-      if (stat.isDirectory()) {
-        const albumFiles = fs.readdirSync(itemPath);
-        const hasAudio = albumFiles.some(f => f.endsWith('.mp3') || f.endsWith('.m4a') || f.endsWith('.wav'));
-        if (hasAudio) {
-          return true;
-        }
-      }
-    }
+    const files = fs.readdirSync(dirPath);
+    return files.some((fileName) => /\.(mp3|m4a|wav|flac|ogg|opus|aac)$/i.test(fileName));
   } catch (err) {
-    logger.debug(`Ошибка проверки папки ${artistDir}: ${err.message}`);
+    logger.debug(`Ошибка проверки папки ${dirPath}: ${err.message}`);
+    return false;
   }
-  
-  return false;
+}
+
+/**
+ * Получает названия плейлистов (альбомов) для последующей проверки полноты
+ */
+function resolvePlaylistAlbumEntries(playlistUrls) {
+  const entries = [];
+
+  for (const playlistUrl of playlistUrls) {
+    try {
+      const output = runYtDlpFlatJson(playlistUrl);
+      const info = JSON.parse(output.split('\n')[0]);
+      const albumName = sanitizePath(info.title || 'Unknown');
+      entries.push({ playlistUrl, albumName, isResolved: true });
+    } catch (err) {
+      logger.debug(`Ошибка получения метаданных плейлиста ${playlistUrl}: ${err.message}`);
+      entries.push({ playlistUrl, albumName: null, isResolved: false });
+    }
+  }
+
+  return entries;
+}
+
+/**
+ * Проверяет, полностью ли уже скачан артист (все найденные альбомы присутствуют)
+ */
+function isArtistDiscographyComplete(artistName, playlistEntries) {
+  const safeArtist = sanitizePath(artistName);
+  const artistDir = path.join(config.outputDir, safeArtist);
+
+  if (!fs.existsSync(artistDir) || !playlistEntries.length) {
+    return false;
+  }
+
+  for (const entry of playlistEntries) {
+    // Если не удалось получить название хотя бы одного плейлиста, полноту считать нельзя.
+    if (!entry.isResolved || !entry.albumName) {
+      return false;
+    }
+
+    const albumDir = path.join(artistDir, entry.albumName);
+    if (!hasAudioFilesInDir(albumDir)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 /**
@@ -436,12 +513,6 @@ function isArtistAlreadyDownloaded(artistName) {
  */
 async function downloadDiscography(artistName) {
   try {
-    // Проверка: был ли уже скачан
-    if (!config.forceRedownload && isArtistAlreadyDownloaded(artistName)) {
-      logger.info(`Пропускаю ${artistName} (уже скачано). Используйте forceRedownload: true в конфиге для переза́грузки`);
-      return true;
-    }
-
     logger.info(`Ищу Topic-канал для: ${artistName}`);
     const channelId = await findTopicChannelId(artistName);
 
@@ -468,24 +539,31 @@ async function downloadDiscography(artistName) {
       return false;
     }
 
+    const playlistEntries = resolvePlaylistAlbumEntries(playlists);
+
+    if (!config.forceRedownload && isArtistDiscographyComplete(artistName, playlistEntries)) {
+      logger.info(`Пропускаю ${artistName} (все найденные альбомы уже скачаны). Используйте forceRedownload: true для переза́грузки`);
+      return true;
+    }
+
     logger.info(`Найдено релиз-плейлистов: ${playlists.length}`);
     await downloadPlaylistUrls(artistName, playlists);
 
     // Загружаем обложки
-    for (const playlistUrl of playlists) {
+    for (const entry of playlistEntries) {
       try {
-        const ytDlpCmd = `yt-dlp --quiet --no-warnings --flat-playlist --skip-download -j "${playlistUrl}"`;
-        const output = execSync(ytDlpCmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
-        const info = JSON.parse(output.split('\n')[0]);
-        const playlistTitle = sanitizePath(info.title || 'Unknown');
+        if (!entry.isResolved || !entry.albumName) {
+          continue;
+        }
+
         const safeArtist = sanitizePath(artistName);
-        const albumDir = path.join(config.outputDir, safeArtist, playlistTitle);
+        const albumDir = path.join(config.outputDir, safeArtist, entry.albumName);
 
         if (fs.existsSync(albumDir)) {
-          await downloadPlaylistCover(playlistUrl, albumDir);
+          await downloadPlaylistCover(entry.playlistUrl, albumDir);
         }
       } catch (err) {
-        logger.debug(`Ошибка при загрузке обложки для ${playlistUrl}: ${err.message}`);
+        logger.debug(`Ошибка при загрузке обложки для ${entry.playlistUrl}: ${err.message}`);
       }
     }
 

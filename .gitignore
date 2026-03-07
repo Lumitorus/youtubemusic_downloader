@@ -6,6 +6,7 @@ old/
 # Логи
 *.log
 download.log
+Мне нравится.txt
 
 # Node.js
 node_modules/
