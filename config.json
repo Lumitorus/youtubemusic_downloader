@@ -2,17 +2,19 @@
   "_notes": {
     "artists": "Если массив не пустой, берется он. Иначе читается artistsFile",
     "blockedKeywords": "Слова для отсева live/концертного/клипового контента",
-    "outputDir": "Папка, куда сохраняются артист/альбом/треки",
-    "forceRedownload": "Если true, переза́гружает даже если уже скачано. Если false, пропускает существующих"
+    "outputDir": "Папка, куда сохраняются артист/альбом/треки (используется если downloadPath пустой)",
+    "downloadPath": "Кастомный путь для загрузки. Поддерживает SMB пути вида \\\\server\\share\\Music или D:\\MyMusic. Если пустой, используется outputDir",
+    "forceRedownload": "Если true, переза́гружает даже если уже скачано. Если false, пропускает существующих",
+    "_example_downloadPath_smb": "\\\\192.168.1.100\\Media\\Music",
+    "_example_downloadPath_local": "D:\\MusicLibrary"
   },
   "forceRedownload": false,
   "artists": [
-    "FEDYA BOOKER",
-    "TMNV",
-    "FACE"
+    "TMNV"
   ],
   "artistsFile": "artists.txt",
   "outputDir": "Music",
+  "downloadPath": "",
   "audioFormat": "mp3",
   "audioQuality": "192",
   "blockedKeywords": [
