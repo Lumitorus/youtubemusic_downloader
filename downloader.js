@@ -85,6 +85,11 @@ function loadConfig(configPath) {
 // Загружаем конфиг (поддерживает комментарии // и /* */)
 const config = loadConfig('config.json');
 
+// Определяем базовую директорию для загрузок (приоритет: downloadPath > outputDir)
+const DOWNLOAD_DIR = config.downloadPath && config.downloadPath.trim() 
+  ? config.downloadPath.trim() 
+  : config.outputDir;
+
 // Логирование
 class Logger {
   constructor(logFile) {
@@ -106,6 +111,208 @@ class Logger {
 }
 
 const logger = new Logger(config.logging.logFile);
+
+// Класс для отслеживания прогресса
+class ProgressTracker {
+  constructor(progressFile) {
+    this.progressFile = progressFile;
+    this.startTime = null;
+    this.totalArtists = 0;
+    this.completedArtists = 0;
+    this.currentArtist = '';
+    this.currentAlbum = '';
+    this.currentTrack = '';
+    this.totalAlbums = 0;
+    this.completedAlbums = 0;
+    this.totalTracks = 0;
+    this.completedTracks = 0;
+    this.downloadPercent = 0;
+    this.totalTracksOverall = 0; // Общее количество завершенных треков
+  }
+
+  start(totalArtists) {
+    this.startTime = new Date();
+    this.totalArtists = totalArtists;
+    this.completedArtists = 0;
+    this.update();
+  }
+
+  setArtist(artistName, albumsCount) {
+    this.currentArtist = artistName;
+    this.currentAlbum = '';
+    this.currentTrack = '';
+    this.totalAlbums = albumsCount;
+    this.completedAlbums = 0;
+    this.totalTracks = 0;
+    this.completedTracks = 0;
+    this.update();
+  }
+
+  setAlbum(albumName, tracksCount) {
+    this.currentAlbum = albumName;
+    this.currentTrack = '';
+    this.totalTracks = tracksCount;
+    this.completedTracks = 0;
+    this.update();
+  }
+
+  setTrack(trackName) {
+    this.currentTrack = trackName;
+    this.downloadPercent = 0;
+    this.update();
+  }
+
+  setTrackProgress(percent) {
+    this.downloadPercent = percent;
+    this.update();
+  }
+
+  completeTrack() {
+    this.completedTracks++;
+    this.totalTracksOverall++;
+    this.currentTrack = '';
+    this.downloadPercent = 0;
+    this.update();
+  }
+
+  completeAlbum() {
+    this.completedAlbums++;
+    this.currentAlbum = '';
+    this.currentTrack = '';
+    this.totalTracks = 0; // Сбрасываем треки для нового альбома
+    this.completedTracks = 0;
+    this.update();
+  }
+
+  completeArtist() {
+    this.completedArtists++;
+    this.currentArtist = '';
+    this.currentAlbum = '';
+    this.currentTrack = '';
+    this.update();
+  }
+
+  calculateEstimatedTime() {
+    if (!this.startTime) {
+      return 'расчет...';
+    }
+
+    const elapsed = (new Date() - this.startTime) / 1000; // секунды
+    
+    // Если есть завершенные артисты, рассчитываем на их основе
+    if (this.completedArtists > 0) {
+      const avgTimePerArtist = elapsed / this.completedArtists;
+      const remainingArtists = this.totalArtists - this.completedArtists;
+      const estimatedSeconds = avgTimePerArtist * remainingArtists;
+
+      const hours = Math.floor(estimatedSeconds / 3600);
+      const minutes = Math.floor((estimatedSeconds % 3600) / 60);
+      const seconds = Math.floor(estimatedSeconds % 60);
+
+      if (hours > 0) {
+        return `~${hours}ч ${minutes}м ${seconds}с`;
+      } else if (minutes > 0) {
+        return `~${minutes}м ${seconds}с`;
+      } else {
+        return `~${seconds}с`;
+      }
+    }
+    
+    // Если артистов нет, но есть завершенные альбомы, рассчитываем на их основе
+    if (this.completedAlbums > 0 && this.totalAlbums > 0) {
+      const avgTimePerAlbum = elapsed / this.completedAlbums;
+      const remainingAlbums = this.totalAlbums - this.completedAlbums;
+      const estimatedSeconds = avgTimePerAlbum * remainingAlbums;
+
+      const hours = Math.floor(estimatedSeconds / 3600);
+      const minutes = Math.floor((estimatedSeconds % 3600) / 60);
+      const seconds = Math.floor(estimatedSeconds % 60);
+
+      if (hours > 0) {
+        return `~${hours}ч ${minutes}м`;
+      } else if (minutes > 0) {
+        return `~${minutes}м ${seconds}с`;
+      } else {
+        return `~${seconds}с`;
+      }
+    }
+    
+    // Показываем прошедшее время
+    const hours = Math.floor(elapsed / 3600);
+    const minutes = Math.floor((elapsed % 3600) / 60);
+    const seconds = Math.floor(elapsed % 60);
+    
+    if (hours > 0) {
+      return `прошло ${hours}ч ${minutes}м`;
+    } else if (minutes > 0) {
+      return `прошло ${minutes}м ${seconds}с`;
+    } else {
+      return `прошло ${seconds}с`;
+    }
+  }
+
+  update() {
+    const now = new Date().toLocaleString('ru-RU');
+    const percent = this.totalArtists > 0 
+      ? Math.round((this.completedArtists / this.totalArtists) * 100)
+      : 0;
+
+    const albumsInfo = this.totalAlbums > 0 
+      ? `${this.completedAlbums}/${this.totalAlbums}`
+      : 'расчет...';
+
+    const tracksInfo = this.totalTracks > 0 
+      ? `${this.completedTracks}/${this.totalTracks}`
+      : 'расчет...';
+
+    const estimatedTime = this.calculateEstimatedTime();
+
+    const progressText = `
+╔═══════════════════════════════════════════════════════════════════╗
+║                    ПРОГРЕСС ЗАГРУЗКИ МУЗЫКИ                       ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+⏰ Время обновления: ${now}
+
+📊 ОБЩИЙ ПРОГРЕСС:
+   Артистов завершено: ${this.completedArtists} из ${this.totalArtists} (${percent}%)
+   Прогресс: [${'█'.repeat(Math.floor(percent / 2))}${' '.repeat(50 - Math.floor(percent / 2))}] ${percent}%
+
+🎵 ТЕКУЩИЙ АРТИСТ: ${this.currentArtist || 'ожидание...'}
+   Альбомов завершено: ${albumsInfo}
+   Треков скачано всего: ${this.totalTracksOverall}
+
+💿 ТЕКУЩИЙ АЛЬБОМ: ${this.currentAlbum || 'ожидание...'}
+   Треков в альбоме: ${tracksInfo}
+
+🎧 ТЕКУЩИЙ ТРЕК: ${this.currentTrack || 'ожидание...'}${this.currentTrack && this.downloadPercent > 0 ? ` (${this.downloadPercent}%)` : ''}
+
+⏱️  ПРИМЕРНОЕ ВРЕМЯ ДО ЗАВЕРШЕНИЯ: ${estimatedTime}
+
+${this.completedArtists === this.totalArtists && this.totalArtists > 0 ? 
+'✅ ВСЕ ЗАГРУЗКИ ЗАВЕРШЕНЫ!' : 
+'🔄 Загрузка в процессе...'}
+
+╔═══════════════════════════════════════════════════════════════════╗
+`;
+
+    try {
+      fs.writeFileSync(this.progressFile, progressText, 'utf-8');
+    } catch (err) {
+      logger.debug(`Ошибка записи прогресса: ${err.message}`);
+    }
+  }
+
+  finish() {
+    this.completedArtists = this.totalArtists;
+    this.currentArtist = '';
+    this.currentAlbum = '';
+    this.currentTrack = '';
+    this.update();
+  }
+}
+
+const progressTracker = new ProgressTracker('progress.txt');
 
 /**
  * Заменяет недопустимые символы в путях Windows
@@ -346,9 +553,9 @@ function downloadFile(url, filePath) {
 /**
  * Скачивает плейлисты с фильтром
  */
-async function downloadPlaylistUrls(artistName, playlistUrls) {
+async function downloadPlaylistUrls(artistName, playlistUrls, playlistTitles = []) {
   const safeArtist = sanitizePath(artistName);
-  const baseDir = path.join(config.outputDir, safeArtist);
+  const baseDir = path.join(DOWNLOAD_DIR, safeArtist);
 
   if (!fs.existsSync(baseDir)) {
     fs.mkdirSync(baseDir, { recursive: true });
@@ -379,9 +586,73 @@ async function downloadPlaylistUrls(artistName, playlistUrls) {
 
   return new Promise((resolve) => {
     const proc = spawn('yt-dlp', ytDlpArgs);
+    
+    let currentAlbumName = '';
+    let currentPlaylistIndex = -1;
+    let currentTrackName = '';
+    let tracksInCurrentAlbum = 0;
+    let albumsCompleted = 0;
 
     proc.stdout.on('data', (data) => {
-      console.log(data.toString());
+      const output = data.toString();
+      console.log(output);
+      
+      // Парсим вывод yt-dlp для обновления прогресса
+      const lines = output.split('\n');
+      for (const line of lines) {
+        // Формат: [download] Downloading playlist: Album Name  
+        const playlistMatch = line.match(/\[download\] Downloading playlist:/);
+        if (playlistMatch) {
+          currentPlaylistIndex++;
+          const albumName = playlistTitles[currentPlaylistIndex] || 'Unknown';
+          if (currentAlbumName && currentAlbumName !== albumName) {
+            // Завершаем предыдущий альбом
+            progressTracker.completeAlbum();
+            albumsCompleted++;
+          }
+          currentAlbumName = albumName;
+          tracksInCurrentAlbum = 0;
+          progressTracker.setAlbum(albumName, 0);
+        }
+        
+        // Формат: [download] Destination: path/Album/01 - Track.mp3
+        const destMatch = line.match(/\[download\] Destination:.*[\/\\](\d+\s*-\s*.+?\.\w+)$/);
+        if (destMatch) {
+          const trackFile = destMatch[1];
+          
+          if (trackFile !== currentTrackName) {
+            currentTrackName = trackFile;
+            tracksInCurrentAlbum++;
+            progressTracker.setTrack(trackFile);
+          }
+        }
+        
+        // Формат: [download]   45.3% of 3.45MiB at 500KiB/s ETA 00:03
+        const progressMatch = line.match(/\[download\]\s+(\d+(?:\.\d+)?)%/);
+        if (progressMatch && currentTrackName) {
+          const percent = Math.floor(parseFloat(progressMatch[1]));
+          progressTracker.setTrackProgress(percent);
+        }
+        
+        // Формат: [download] 100% of 3.45MiB или [download]   100.0%
+        const completeMatch = line.match(/\[download\]\s+100(?:\.0)?%/);
+        if (completeMatch && currentTrackName) {
+          progressTracker.completeTrack();
+        }
+        
+        // Формат: [download] Finished downloading playlist: Album Name
+        const finishedMatch = line.match(/\[download\] Finished downloading playlist:/);
+        if (finishedMatch && currentAlbumName) {
+          progressTracker.completeAlbum();
+          albumsCompleted++;
+        }
+        
+        // Формат: [Metadata] Adding metadata to "path/Album/01 - Track.mp3"
+        const metadataMatch = line.match(/\[Metadata\]/);
+        if (metadataMatch) {
+          currentTrackName = ''; // Трек полностью готов
+        }
+      }
     });
 
     proc.stderr.on('data', (data) => {
@@ -389,6 +660,11 @@ async function downloadPlaylistUrls(artistName, playlistUrls) {
     });
 
     proc.on('close', (code) => {
+      // Завершаем последний альбом, если есть
+      if (currentAlbumName) {
+        progressTracker.completeAlbum();
+      }
+      
       if (code === 0 || code === 1) {
         // yt-dlp часто возвращает 1 даже при частичном успехе
         resolve(true);
@@ -404,7 +680,7 @@ async function downloadPlaylistUrls(artistName, playlistUrls) {
  */
 function isArtistAlreadyDownloaded(artistName) {
   const safeArtist = sanitizePath(artistName);
-  const artistDir = path.join(config.outputDir, safeArtist);
+  const artistDir = path.join(DOWNLOAD_DIR, safeArtist);
   
   if (!fs.existsSync(artistDir)) {
     return false;
@@ -469,23 +745,42 @@ async function downloadDiscography(artistName) {
     }
 
     logger.info(`Найдено релиз-плейлистов: ${playlists.length}`);
-    await downloadPlaylistUrls(artistName, playlists);
-
-    // Загружаем обложки
+    
+    // Получаем названия всех плейлистов заранее
+    const playlistTitles = [];
     for (const playlistUrl of playlists) {
       try {
         const ytDlpCmd = `yt-dlp --quiet --no-warnings --flat-playlist --skip-download -j "${playlistUrl}"`;
         const output = execSync(ytDlpCmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
         const info = JSON.parse(output.split('\n')[0]);
+        playlistTitles.push(info.title || 'Unknown');
+      } catch (err) {
+        playlistTitles.push('Unknown');
+        logger.debug(`Ошибка получения названия плейлиста: ${err.message}`);
+      }
+    }
+    
+    // Обновляем прогресс: начинаем загрузку артиста
+    progressTracker.setArtist(artistName, playlists.length);
+    
+    await downloadPlaylistUrls(artistName, playlists, playlistTitles);
+
+    // Загружаем обложки
+    for (let i = 0; i < playlists.length; i++) {
+      try {
+        const playlistUrl = playlists[i];
+        const ytDlpCmd = `yt-dlp --quiet --no-warnings --flat-playlist --skip-download -j "${playlistUrl}"`;
+        const output = execSync(ytDlpCmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+        const info = JSON.parse(output.split('\n')[0]);
         const playlistTitle = sanitizePath(info.title || 'Unknown');
         const safeArtist = sanitizePath(artistName);
-        const albumDir = path.join(config.outputDir, safeArtist, playlistTitle);
+        const albumDir = path.join(DOWNLOAD_DIR, safeArtist, playlistTitle);
 
         if (fs.existsSync(albumDir)) {
           await downloadPlaylistCover(playlistUrl, albumDir);
         }
       } catch (err) {
-        logger.debug(`Ошибка при загрузке обложки для ${playlistUrl}: ${err.message}`);
+        logger.debug(`Ошибка при загрузке обложки для ${playlists[i]}: ${err.message}`);
       }
     }
 
@@ -528,6 +823,10 @@ async function main() {
   }
 
   logger.info(`Найдено артистов: ${artists.length}`);
+  logger.info(`Путь загрузки: ${DOWNLOAD_DIR}`);
+
+  // Инициализация прогресс-трекера
+  progressTracker.start(artists.length);
 
   let successful = 0;
   let failed = 0;
@@ -537,10 +836,15 @@ async function main() {
     logger.info(`\n[${i + 1}/${artists.length}] Обработка: ${artist}`);
     if (await downloadDiscography(artist)) {
       successful++;
+      progressTracker.completeArtist();
     } else {
       failed++;
+      progressTracker.completeArtist();
     }
   }
+
+  // Финализация прогресса
+  progressTracker.finish();
 
   logger.info('\n' + '==================================================');
   logger.info(`Результаты: ${successful} успешно, ${failed} ошибок`);
