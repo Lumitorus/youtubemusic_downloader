@@ -11,8 +11,8 @@
   ],
   "artistsFile": "Мне нравится.txt",
   "outputDir": "M:\\Youtube",
-  "audioFormat": "mp3",
-  "audioQuality": "192",
+  "audioFormat": "opus",
+  "audioQuality": "96K",
   "blockedKeywords": [
     "live",
     "concert",
@@ -34,14 +34,14 @@
   "ytDlpOptions": {
     "quiet": false,
     "noWarnings": false,
-    "socketTimeout": 30,
+    "socketTimeout": 20,
     "ignoreerrors": true,
-    "sleepRequests": 1,
-    "sleepInterval": 2,
-    "maxSleepInterval": 6,
-    "retries": 10,
-    "extractorRetries": 10,
-    "retrySleep": 2
+    "sleepRequests": 0.25,
+    "sleepInterval": 0.25,
+    "maxSleepInterval": 1.0,
+    "retries": 5,
+    "extractorRetries": 5,
+    "retrySleep": 0.5
   },
   "logging": {
     "logFile": "download.log",

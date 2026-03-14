@@ -5,7 +5,8 @@
   "main": "downloader.js",
   "scripts": {
     "start": "node downloader.js",
-    "dev": "node downloader.js"
+    "dev": "node downloader.js",
+    "convert:opus": "node converter.js"
   },
   "keywords": ["youtube", "music", "downloader", "lidarr"],
   "author": "",
