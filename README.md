@@ -10,15 +10,16 @@
 - ✅ Автоматический поиск Topic-каналов YouTube Music
 - ✅ Загрузка альбомов с обложками
 - ✅ Фильтрация live/концертного контента
-- ✅ Проверка уже скачанных артистов (пропуск повторной загрузки)
+- ✅ Проверка полноты уже скачанных альбомов (пропуск полностью заполненных артистов)
 - ✅ ID3 теги для правильного распознавания в Lidarr
 - ✅ Логирование всех операций
+- ✅ Отдельный конвертер `mp3 -> opus` для уже скачанной библиотеки
 
 ## Требования
 
 - **Node.js** 14+
 - **yt-dlp** — загрузчик видео с YouTube
-- **FFmpeg** — конвертация аудио в MP3
+- **FFmpeg** — конвертация аудио в `opus`/`mp3`
 
 ## Быстрая установка (Windows)
 
@@ -41,10 +42,30 @@ choco install nodejs ffmpeg yt-dlp
 | `artists` | Массив исполнителей (приоритетный) | `["AC/DC", "Linkin Park"]` |
 | `artistsFile` | Файл со списком артистов (fallback) | `"artists.txt"` |
 | `outputDir` | Папка для музыки | `"Music"` |
-| `audioFormat` | Формат после конвертации | `"mp3"` |
-| `audioQuality` | Качество в кбит/с | `"192"` |
+| `audioFormat` | Формат после конвертации | `"opus"` |
+| `audioQuality` | Битрейт аудио | `"96K"` |
 | `forceRedownload` | Переза́гружать существующих | `false` |
 | `blockedKeywords` | Фильтрация контента | `["live", "concert", "session"]` |
+| `ytDlpOptions` | Паузы/ретраи/таймауты для yt-dlp | см. пример ниже |
+
+### Пример `ytDlpOptions` (баланс скорость/стабильность)
+
+```json
+{
+  "ytDlpOptions": {
+    "quiet": false,
+    "noWarnings": false,
+    "socketTimeout": 20,
+    "ignoreerrors": true,
+    "sleepRequests": 0.25,
+    "sleepInterval": 0.25,
+    "maxSleepInterval": 1.0,
+    "retries": 5,
+    "extractorRetries": 5,
+    "retrySleep": 0.5
+  }
+}
+```
 
 ## Использование
 
@@ -88,6 +109,21 @@ npm start
 # Или напрямую:
 node downloader.js
 ```
+
+### Конвертация существующей библиотеки `mp3 -> opus`
+
+```bash
+# Просмотр плана без изменений
+npm run convert:opus -- --dry-run
+
+# Конвертация в opus (mp3 пока остаются)
+npm run convert:opus
+
+# Конвертация + удаление исходных mp3
+npm run convert:opus -- --delete-source
+```
+
+Если рядом уже есть валидный `*.opus`, скрипт не делает дубликат и удаляет соответствующий `*.mp3`.
 
 ## Логирование
 
@@ -197,7 +233,13 @@ choco install yt-dlp
 
 **Решение**: Измените `forceRedownload` на `false` в `config.json` или используйте флаг по умолчанию. 
 
-Скрипт проверяет наличие аудиофайлов в папке `Music/ArtistName/` и пропускает уже скачанных артистов, если `forceRedownload: false`.
+Скрипт проверяет найденные релиз-плейлисты и пропускает артиста, только если все соответствующие папки альбомов уже содержат аудиофайлы (при `forceRedownload: false`).
+
+### ⚠️ Слишком медленно: много `Sleeping ...`
+
+**Причина**: слишком большие значения `sleepRequests` / `sleepInterval` / `maxSleepInterval` в `ytDlpOptions`.
+
+**Решение**: уменьшить паузы в `config.json` (например, как в профиле выше). Если YouTube снова начнет rate-limit'ить, слегка поднимите `sleepRequests` (например, до `0.5`).
 
 ### ⚠️ Скачиваются live/concert версии вместо студийных
 
