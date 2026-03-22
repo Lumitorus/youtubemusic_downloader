@@ -4,9 +4,11 @@
     "blockedKeywords": "Слова для отсева live/концертного/клипового контента",
     "outputDir": "Папка, куда сохраняются артист/альбом/треки",
     "forceRedownload": "Если true, переза́гружает даже если уже скачано. Если false, пропускает существующих",
-    "ytDlpOptions": "Опции yt-dlp на уровне проекта: задержки/ретраи для снижения риска rate-limit"
+    "ytDlpOptions": "Опции yt-dlp на уровне проекта: задержки/ретраи для снижения риска rate-limit",
+    "skipByOutputDirOnly": "Если true и forceRedownload=false: пропускать артиста по наличию аудио в outputDir без проверки через yt-dlp"
   },
   "forceRedownload": false,
+  "skipByOutputDirOnly": true,
   "artists": [
   ],
   "artistsFile": "Мне нравится.txt",
