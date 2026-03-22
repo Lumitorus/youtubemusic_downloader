@@ -45,6 +45,7 @@ choco install nodejs ffmpeg yt-dlp
 | `audioFormat` | Формат после конвертации | `"opus"` |
 | `audioQuality` | Битрейт аудио | `"96K"` |
 | `forceRedownload` | Переза́гружать существующих | `false` |
+| `skipByOutputDirOnly` | Быстрый пропуск по наличию аудио в outputDir (без yt-dlp проверки полноты) | `false` |
 | `blockedKeywords` | Фильтрация контента | `["live", "concert", "session"]` |
 | `ytDlpOptions` | Паузы/ретраи/таймауты для yt-dlp | см. пример ниже |
 
@@ -100,6 +101,9 @@ AC/DC
 Linkin Park
 Queen
 ```
+
+Строки с коллабами автоматически разбиваются по запятой.
+Пример: `Ghostemane, Pouya` будет обработано как два отдельных артиста.
 
 ### Запуск
 
@@ -240,6 +244,19 @@ choco install yt-dlp
 **Причина**: слишком большие значения `sleepRequests` / `sleepInterval` / `maxSleepInterval` в `ytDlpOptions`.
 
 **Решение**: уменьшить паузы в `config.json` (например, как в профиле выше). Если YouTube снова начнет rate-limit'ить, слегка поднимите `sleepRequests` (например, до `0.5`).
+
+### ⚠️ Повторный прогон слишком долго проверяет уже скачанных
+
+**Решение**: включить быстрый режим:
+
+```json
+{
+  "forceRedownload": false,
+  "skipByOutputDirOnly": true
+}
+```
+
+В этом режиме артист пропускается сразу, если в `outputDir/ArtistName` уже найден любой аудиофайл.
 
 ### ⚠️ Скачиваются live/concert версии вместо студийных
 

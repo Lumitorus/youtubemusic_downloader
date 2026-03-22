@@ -158,6 +158,29 @@ function runYtDlpFlatJson(target) {
   return execFileSync('yt-dlp', args, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
 }
 
+function normalizeArtists(rawArtists) {
+  const out = [];
+  const seen = new Set();
+
+  for (const value of rawArtists || []) {
+    if (typeof value !== 'string') continue;
+
+    const chunks = value
+      .split(',')
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0);
+
+    for (const artist of chunks) {
+      const key = artist.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(artist);
+    }
+  }
+
+  return out;
+}
+
 /**
  * Заменяет недопустимые символы в путях Windows
  */
@@ -462,6 +485,40 @@ function hasAudioFilesInDir(dirPath) {
 }
 
 /**
+ * Быстрая проверка: есть ли у артиста хоть один аудиофайл в outputDir
+ */
+function hasAnyArtistAudioInOutputDir(artistName) {
+  const safeArtist = sanitizePath(artistName);
+  const artistDir = path.join(config.outputDir, safeArtist);
+
+  if (!fs.existsSync(artistDir)) {
+    return false;
+  }
+
+  const stack = [artistDir];
+
+  try {
+    while (stack.length) {
+      const current = stack.pop();
+      const items = fs.readdirSync(current, { withFileTypes: true });
+
+      for (const item of items) {
+        const fullPath = path.join(current, item.name);
+        if (item.isDirectory()) {
+          stack.push(fullPath);
+        } else if (item.isFile() && /\.(mp3|m4a|wav|flac|ogg|opus|aac)$/i.test(item.name)) {
+          return true;
+        }
+      }
+    }
+  } catch (err) {
+    logger.debug(`Ошибка быстрой проверки папки ${artistDir}: ${err.message}`);
+  }
+
+  return false;
+}
+
+/**
  * Получает названия плейлистов (альбомов) для последующей проверки полноты
  */
 function resolvePlaylistAlbumEntries(playlistUrls) {
@@ -513,6 +570,11 @@ function isArtistDiscographyComplete(artistName, playlistEntries) {
  */
 async function downloadDiscography(artistName) {
   try {
+    if (!config.forceRedownload && config.skipByOutputDirOnly === true && hasAnyArtistAudioInOutputDir(artistName)) {
+      logger.info(`Пропускаю ${artistName} (найдено в outputDir, режим skipByOutputDirOnly=true)`);
+      return true;
+    }
+
     logger.info(`Ищу Topic-канал для: ${artistName}`);
     const channelId = await findTopicChannelId(artistName);
 
@@ -587,13 +649,11 @@ async function main() {
   let artists = [];
 
   if (config.artists && Array.isArray(config.artists) && config.artists.length > 0) {
-    artists = config.artists.filter(a => typeof a === 'string' && a.trim().length > 0);
+    artists = normalizeArtists(config.artists);
     logger.info('Артисты загружены из config.json');
   } else if (fs.existsSync(config.artistsFile)) {
     const artistsData = fs.readFileSync(config.artistsFile, 'utf-8');
-    artists = artistsData.split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0);
+    artists = normalizeArtists(artistsData.split('\n'));
     logger.info(`Артисты загружены из файла ${config.artistsFile}`);
   } else {
     logger.error(`Не найдено ни списка артистов в config.json, ни файла ${config.artistsFile}`);
