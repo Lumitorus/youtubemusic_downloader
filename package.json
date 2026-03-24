@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node downloader.js",
     "dev": "node downloader.js",
-    "convert:opus": "node converter.js"
+    "convert:opus": "node converter.js",
+    "cookies:export": "node export-cookies.js"
   },
   "keywords": ["youtube", "music", "downloader", "lidarr"],
   "author": "",
