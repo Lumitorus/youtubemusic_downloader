@@ -110,6 +110,15 @@ class Logger {
   warn(msg) { this.log('WARN', msg); }
   error(msg) { this.log('ERROR', msg); }
   debug(msg) { this.log('DEBUG', msg); }
+
+  raw(message) {
+    if (message == null) {
+      return;
+    }
+
+    const text = String(message);
+    this.stream.write(text.endsWith('\n') ? text : text + '\n');
+  }
 }
 
 function generateLogFileName() {
@@ -147,18 +156,26 @@ function getYtDlpRuntimeOptions() {
     maxSleepInterval: toPositiveNumber(opts.maxSleepInterval),
     retries: toPositiveNumber(opts.retries),
     extractorRetries: toPositiveNumber(opts.extractorRetries),
-    retrySleep: toPositiveNumber(opts.retrySleep)
+    retrySleep: toPositiveNumber(opts.retrySleep),
+    cookiesFromBrowser: typeof opts.cookiesFromBrowser === 'string' ? opts.cookiesFromBrowser.trim() : '',
+    cookiesFile: typeof opts.cookiesFile === 'string' ? opts.cookiesFile.trim() : ''
   };
 }
 
-function buildYtDlpCommonArgs() {
+function buildYtDlpCommonArgs(runtimeOverrides = {}) {
   const opts = getYtDlpRuntimeOptions();
+  const disableAuth = runtimeOverrides.disableAuth === true;
   const args = [];
 
   if (opts.quiet) args.push('--quiet');
   if (opts.noWarnings) args.push('--no-warnings');
   if (opts.ignoreErrors) args.push('--ignore-errors');
   if (opts.socketTimeout) args.push('--socket-timeout', String(opts.socketTimeout));
+  if (!disableAuth && opts.cookiesFromBrowser) {
+    args.push('--cookies-from-browser', opts.cookiesFromBrowser);
+  } else if (!disableAuth && opts.cookiesFile) {
+    args.push('--cookies', opts.cookiesFile);
+  }
   if (opts.sleepRequests) args.push('--sleep-requests', String(opts.sleepRequests));
   if (opts.sleepInterval) args.push('--sleep-interval', String(opts.sleepInterval));
   if (opts.maxSleepInterval) args.push('--max-sleep-interval', String(opts.maxSleepInterval));
@@ -173,16 +190,92 @@ function buildYtDlpCommonArgs() {
   return args;
 }
 
-function runYtDlpFlatJson(target) {
+function getYtDlpAuthSummary() {
+  const opts = getYtDlpRuntimeOptions();
+
+  if (opts.cookiesFromBrowser) {
+    return `cookies from browser: ${opts.cookiesFromBrowser}`;
+  }
+
+  if (opts.cookiesFile) {
+    return `cookies file: ${opts.cookiesFile}`;
+  }
+
+  return 'no cookies configured';
+}
+
+function detectYtDlpProtection(output) {
+  const text = String(output || '').toLowerCase();
+
+  return {
+    isRateLimit:
+      text.includes('rate-limited') ||
+      text.includes('rate limit') ||
+      text.includes('too many requests') ||
+      text.includes('current session has been rate-limited'),
+    isBotCheck:
+      text.includes('sign in to confirm you') ||
+      text.includes('not a bot') ||
+      text.includes('use --cookies-from-browser or --cookies for the authentication') ||
+      text.includes('use --cookies for the authentication'),
+    isCookieAccessError:
+      text.includes('could not copy chrome cookie database') ||
+      text.includes('cookie database') ||
+      text.includes('failed to decrypt cookies') ||
+      text.includes('browser cookies are locked')
+  };
+}
+
+function createYtDlpError(message, output) {
+  const issue = detectYtDlpProtection(output);
+  const error = new Error(message);
+  error.output = output;
+  error.isRateLimit = issue.isRateLimit;
+  error.isBotCheck = issue.isBotCheck;
+  error.isCookieAccessError = issue.isCookieAccessError;
+  return error;
+}
+
+function writeChildOutput(text, isErrorStream) {
+  if (!text) {
+    return;
+  }
+
+  if (isErrorStream) {
+    process.stderr.write(text);
+  } else {
+    process.stdout.write(text);
+  }
+
+  logger.raw(text);
+}
+
+function runYtDlpFlatJson(target, runtimeOverrides = {}) {
   const args = [
-    ...buildYtDlpCommonArgs(),
+    ...buildYtDlpCommonArgs(runtimeOverrides),
     '--flat-playlist',
     '--skip-download',
     '-j',
     target
   ];
 
-  return execFileSync('yt-dlp', args, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+  try {
+    return execFileSync('yt-dlp', args, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+  } catch (err) {
+    const output = [err.stdout, err.stderr]
+      .filter((value) => typeof value === 'string' && value.length > 0)
+      .join('\n');
+
+    writeChildOutput(output, true);
+
+    const ytDlpError = createYtDlpError(`yt-dlp failed for ${target}: ${err.message}`, output || err.message);
+    if (ytDlpError.isCookieAccessError && runtimeOverrides.disableAuth !== true) {
+      logger.warn('yt-dlp не смог прочитать cookies из браузера. Пробую повторить запрос без browser cookies. Закрой Edge/Chrome полностью или используй cookiesFile, если нужен авторизованный доступ.');
+      return runYtDlpFlatJson(target, { ...runtimeOverrides, disableAuth: true });
+    }
+
+    throw ytDlpError;
+  }
 }
 
 function normalizeArtists(rawArtists) {
@@ -312,6 +405,9 @@ async function collectReleasePlaylistsUrls(channelId) {
 
     return [...new Set(urls)]; // Убираем дубли
   } catch (err) {
+    if (err.isBotCheck || err.isRateLimit) {
+      throw err;
+    }
     logger.debug(`Ошибка получения releases: ${err.message}`);
     return [];
   }
@@ -343,6 +439,9 @@ async function collectPlaylistTabUrls(channelId) {
 
     return [...new Set(urls)];
   } catch (err) {
+    if (err.isBotCheck || err.isRateLimit) {
+      throw err;
+    }
     logger.debug(`Ошибка получения playlists: ${err.message}`);
     return [];
   }
@@ -387,6 +486,9 @@ async function collectAlbumPlaylistsBySearch(artistName) {
 
     return [...new Set(urls)];
   } catch (err) {
+    if (err.isBotCheck || err.isRateLimit) {
+      throw err;
+    }
     logger.debug(`Ошибка поиска альбомов: ${err.message}`);
     return [];
   }
@@ -446,6 +548,7 @@ async function downloadPlaylistUrls(artistName, playlistUrls) {
   const BASE_DELAY_MS = 5000; // 5 секунд
   
   let attempt = 0;
+  let triedWithoutBrowserCookies = false;
   
   while (attempt < MAX_RETRIES) {
     attempt++;
@@ -459,7 +562,9 @@ async function downloadPlaylistUrls(artistName, playlistUrls) {
       logger.debug(`Начало скачивания плейлистов для ${artistName} (попытка ${attempt}/${MAX_RETRIES})`);
     }
     
-    const result = await downloadPlaylistUrlsOnce(artistName, playlistUrls);
+    const result = await downloadPlaylistUrlsOnce(artistName, playlistUrls, {
+      disableAuth: triedWithoutBrowserCookies
+    });
     
     if (result.success) {
       if (attempt > 1) {
@@ -467,7 +572,20 @@ async function downloadPlaylistUrls(artistName, playlistUrls) {
       }
       return true;
     }
+
+    if (result.isCookieAccessError && !triedWithoutBrowserCookies) {
+      triedWithoutBrowserCookies = true;
+      logger.warn('yt-dlp не смог использовать cookies из браузера. Повторяю скачивание без browser cookies. Закрой браузер полностью или перейди на cookiesFile, если авторизация обязательна.');
+      attempt--;
+      continue;
+    }
     
+    if (result.isBotCheck) {
+      logger.error('yt-dlp запросил подтверждение "я не бот". Останавливаю текущий артист, чтобы не тратить запросы впустую.');
+      logger.error(`Настрой cookies через ytDlpOptions.cookiesFromBrowser или ytDlpOptions.cookiesFile. Текущий режим: ${getYtDlpAuthSummary()}`);
+      throw createYtDlpError(`Anti-bot check while downloading ${artistName}`, result.output || 'bot check');
+    }
+
     if (result.isRateLimit && attempt < MAX_RETRIES) {
       logger.warn(`Rate-limit обнаружен, переопробую (${attempt}/${MAX_RETRIES})...`);
       continue;
@@ -484,9 +602,9 @@ async function downloadPlaylistUrls(artistName, playlistUrls) {
 
 /**
  * Одна попытка скачивания плейлистов
- * @returns {Object} { success: boolean, isRateLimit: boolean }
+ * @returns {Object} { success: boolean, isRateLimit: boolean, isBotCheck: boolean, isCookieAccessError: boolean, output: string }
  */
-async function downloadPlaylistUrlsOnce(artistName, playlistUrls) {
+async function downloadPlaylistUrlsOnce(artistName, playlistUrls, runtimeOverrides = {}) {
   const safeArtist = sanitizePath(artistName);
   const baseDir = path.join(config.outputDir, safeArtist);
 
@@ -500,7 +618,7 @@ async function downloadPlaylistUrlsOnce(artistName, playlistUrls) {
     .join('&');
 
   const ytDlpArgs = [
-    ...buildYtDlpCommonArgs(),
+    ...buildYtDlpCommonArgs(runtimeOverrides),
     '--format', 'bestaudio/best',
     '--yes-playlist',
     '-o', path.join(baseDir, '%(playlist_title,album|Singles)s/%(playlist_index,autonumber)02d - %(title)s.%(ext)s'),
@@ -518,35 +636,63 @@ async function downloadPlaylistUrlsOnce(artistName, playlistUrls) {
   ytDlpArgs.push(...playlistUrls);
 
   return new Promise((resolve) => {
-    let stderrOutput = '';
+    let combinedOutput = '';
     let isRateLimited = false;
+    let isBotCheck = false;
+    let isCookieAccessError = false;
+    let abortRequested = false;
     
     const proc = spawn('yt-dlp', ytDlpArgs);
 
+    function handleChunk(data, isErrorStream) {
+      const output = data.toString();
+      combinedOutput += output;
+      writeChildOutput(output, isErrorStream);
+
+      const issue = detectYtDlpProtection(output);
+      if (issue.isRateLimit) {
+        isRateLimited = true;
+      }
+      if (issue.isBotCheck) {
+        isBotCheck = true;
+      }
+      if (issue.isCookieAccessError) {
+        isCookieAccessError = true;
+      }
+
+      if (!abortRequested && (issue.isRateLimit || issue.isBotCheck || issue.isCookieAccessError)) {
+        abortRequested = true;
+        logger.warn('Обнаружена защитная ошибка YouTube. Останавливаю текущий запуск yt-dlp, чтобы не продолжать остальные треки плейлиста.');
+        proc.kill();
+      }
+    }
+
     proc.stdout.on('data', (data) => {
-      console.log(data.toString());
+      handleChunk(data, false);
     });
 
     proc.stderr.on('data', (data) => {
-      const output = data.toString();
-      stderrOutput += output;
-      console.log(output);
-      
-      // Проверяем на rate-limit ошибку
-      if (output.includes('rate-limited') || output.includes('rate limit')) {
-        isRateLimited = true;
-      }
+      handleChunk(data, true);
+    });
+
+    proc.on('error', (err) => {
+      resolve({ success: false, isRateLimit: false, isBotCheck: false, isCookieAccessError: false, output: err.message });
     });
 
     proc.on('close', (code) => {
       const success = code === 0 || code === 1;
       
-      if (!success && isRateLimited) {
-        resolve({ success: false, isRateLimit: true });
+      if (isCookieAccessError) {
+        resolve({ success: false, isRateLimit: isRateLimited, isBotCheck, isCookieAccessError: true, output: combinedOutput });
+      } else
+      if (isBotCheck) {
+        resolve({ success: false, isRateLimit: isRateLimited, isBotCheck: true, isCookieAccessError: false, output: combinedOutput });
+      } else if (!success && isRateLimited) {
+        resolve({ success: false, isRateLimit: true, isBotCheck: false, isCookieAccessError: false, output: combinedOutput });
       } else if (success) {
-        resolve({ success: true, isRateLimit: false });
+        resolve({ success: true, isRateLimit: false, isBotCheck: false, isCookieAccessError: false, output: combinedOutput });
       } else {
-        resolve({ success: false, isRateLimit: false });
+        resolve({ success: false, isRateLimit: false, isBotCheck: false, isCookieAccessError: false, output: combinedOutput });
       }
     });
   });
@@ -616,6 +762,9 @@ function resolvePlaylistAlbumEntries(playlistUrls) {
       const albumName = sanitizePath(info.title || 'Unknown');
       entries.push({ playlistUrl, albumName, isResolved: true });
     } catch (err) {
+      if (err.isBotCheck || err.isRateLimit) {
+        throw err;
+      }
       logger.debug(`Ошибка получения метаданных плейлиста ${playlistUrl}: ${err.message}`);
       entries.push({ playlistUrl, albumName: null, isResolved: false });
     }
@@ -717,6 +866,17 @@ async function downloadDiscography(artistName) {
     logger.info(`Завершено: ${artistName}`);
     return true;
   } catch (err) {
+    if (err.isCookieAccessError) {
+      logger.warn(`Не удалось использовать browser cookies для ${artistName}. Если браузер открыт, закрой его полностью или используй cookiesFile.`);
+      logger.error(`Ошибка при обработке ${artistName}: ${err.message}`);
+      return false;
+    }
+
+    if (err.isBotCheck) {
+      logger.error(`YouTube запросил антибот-подтверждение для ${artistName}. Текущий режим авторизации: ${getYtDlpAuthSummary()}`);
+      throw err;
+    }
+
     logger.error(`Ошибка при обработке ${artistName}: ${err.message}`);
     return false;
   }
@@ -729,6 +889,7 @@ async function main() {
   logger.info('==================================================');
   logger.info('Запуск загрузчика дискографии');
   logger.info(`Логфайл: ${logger.logFile}`);
+  logger.info(`yt-dlp auth: ${getYtDlpAuthSummary()}`);
   logger.info('==================================================');
 
   // Чтение списка артистов (приоритет: config > файл)
@@ -759,10 +920,21 @@ async function main() {
   for (let i = 0; i < artists.length; i++) {
     const artist = artists[i];
     logger.info(`\n[${i + 1}/${artists.length}] Обработка: ${artist}`);
-    if (await downloadDiscography(artist)) {
-      successful++;
-    } else {
+    try {
+      if (await downloadDiscography(artist)) {
+        successful++;
+      } else {
+        failed++;
+      }
+    } catch (err) {
       failed++;
+
+      if (err.isBotCheck) {
+        logger.error('Останавливаю весь запуск: YouTube потребовал подтверждение "я не бот". Настрой cookies и перезапусти скрипт.');
+        break;
+      }
+
+      logger.error(`Ошибка верхнего уровня для ${artist}: ${err.message}`);
     }
   }
 

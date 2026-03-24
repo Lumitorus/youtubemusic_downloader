@@ -49,7 +49,7 @@ choco install nodejs ffmpeg yt-dlp
 | `forceRedownload` | Переза́гружать существующих | `false` |
 | `skipByOutputDirOnly` | Быстрый пропуск по наличию аудио в outputDir (без yt-dlp проверки полноты) | `false` |
 | `blockedKeywords` | Фильтрация контента | `["live", "concert", "session"]` |
-| `ytDlpOptions` | Паузы/ретраи/таймауты для yt-dlp | см. пример ниже |
+| `ytDlpOptions` | Паузы/ретраи/таймауты/cookies для yt-dlp | см. пример ниже |
 
 ### Пример `ytDlpOptions` (рекомендуется для избежания rate-limit)
 
@@ -60,6 +60,8 @@ choco install nodejs ffmpeg yt-dlp
     "noWarnings": false,
     "socketTimeout": 30,
     "ignoreerrors": true,
+    "cookiesFromBrowser": "",
+    "cookiesFile": "cookies\\youtube.txt",
     "sleepRequests": 2,
     "sleepInterval": 3,
     "maxSleepInterval": 10,
@@ -72,11 +74,36 @@ choco install nodejs ffmpeg yt-dlp
 
 **Параметры:**
 - `socketTimeout` — таймаут соединения (сек)
+- `cookiesFromBrowser` — прямое чтение cookies из браузера. Практически имеет смысл в основном для Firefox
+- `cookiesFile` — путь к Netscape `cookies.txt`. Это основной и рекомендуемый вариант
 - `sleepRequests` — задержка между HTTP запросами (сек)
 - `sleepInterval` — задержка между видео в плейлисте (сек)
 - `maxSleepInterval` — максимальная задержка (сек)
 - `retries` — количество попыток переподключения
 - `retrySleep` — задержка между попытками (сек)
+
+Если YouTube начинает требовать подтверждение "я не бот", основная рекомендация для Windows: не использовать `cookiesFromBrowser` для Chromium-браузеров, а работать через `cookiesFile`.
+
+Пример для Firefox:
+
+```json
+{
+  "ytDlpOptions": {
+    "cookiesFromBrowser": "firefox"
+  }
+}
+```
+
+Пример для ручного `cookies.txt`:
+
+```json
+{
+  "ytDlpOptions": {
+    "cookiesFromBrowser": "",
+    "cookiesFile": "cookies\\youtube.txt"
+  }
+}
+```
 
 ## Использование
 
@@ -166,6 +193,7 @@ youtubemusic_downloader/
 ├── downloader.js          # Основной скрипт загрузки дискографии
 ├── converter.js           # Конвертер аудио (MP3/M4A/FLAC/etc → OPUS)
 ├── cleanup-empty-dirs.js  # Удаление пустых папок альбомов
+├── export-cookies.js      # Экспорт cookies из браузера в файл для yt-dlp
 ├── config.json            # Конфигурация проекта
 ├── package.json
 ├── README.md
@@ -183,6 +211,94 @@ youtubemusic_downloader/
 | downloader.js | `node downloader.js` | Загрузка дискографии артистов с YouTube |
 | converter.js | `node converter.js --delete-source` | Конвертация аудио в OPUS |
 | cleanup-empty-dirs.js | `node cleanup-empty-dirs.js` | Удаление пустых папок альбомов |
+| export-cookies.js | `npm run cookies:export` | Экспорт cookies из браузера в Netscape-файл |
+
+### Экспорт cookies в файл
+
+Если `cookiesFromBrowser` нестабилен или браузер держит cookie database заблокированной, можно вообще обойтись без проектных скриптов и использовать ручной `cookies.txt`.
+
+### Ручная настройка cookies без скриптов
+
+Если при скачивании появляется ошибка вида `Sign in to confirm you're not a bot`, сделай так:
+
+1. Войди в свой аккаунт YouTube в обычном браузере
+2. Экспортируй cookies в Netscape `cookies.txt`
+3. Положи файл в папку `cookies/youtube.txt`
+4. Обнови `config.json`:
+
+```json
+{
+  "ytDlpOptions": {
+    "cookiesFromBrowser": "",
+    "cookiesFile": "cookies\\youtube.txt"
+  }
+}
+```
+
+### В каком браузере это делать
+
+- `Firefox`: лучший вариант для прямой работы с `yt-dlp`, можно использовать и `cookiesFromBrowser`, и ручной экспорт
+- `Edge`: на Windows прямое чтение через `cookiesFromBrowser` часто ломается, лучше экспортировать `cookies.txt` вручную
+- `Chrome`: на Windows та же история, лучше ручной `cookies.txt`
+- `Brave`: тоже Chromium, лучше ручной `cookies.txt`
+- `Vivaldi`: тоже Chromium, лучше ручной `cookies.txt`
+- `Opera`: тоже Chromium, лучше ручной `cookies.txt`
+
+### Как сделать cookies.txt вручную
+
+Общий принцип для всех браузеров:
+
+1. Открой `youtube.com` и убедись, что ты залогинен
+2. Установи расширение для экспорта cookies в Netscape-формат, например `Get cookies.txt LOCALLY`
+3. На странице YouTube нажми на расширение и экспортируй cookies
+4. Сохрани файл как `cookies/youtube.txt`
+
+Важно:
+
+- нужен именно Netscape `cookies.txt`, не raw sqlite база браузера
+- если расширение предлагает выбор домена, экспортируй cookies для `youtube.com` и связанных google-доменов, если они попадают в файл автоматически
+- после замены cookies просто перезапусти `node downloader.js`
+
+### Кратко по браузерам
+
+- `Firefox`: зайди в YouTube, экспортируй cookies расширением, либо попробуй `cookiesFromBrowser: "firefox"`
+- `Edge`: зайди в YouTube, экспортируй cookies расширением, используй только `cookiesFile`
+- `Chrome`: зайди в YouTube, экспортируй cookies расширением, используй только `cookiesFile`
+- `Brave`: то же, что для Chrome
+- `Vivaldi`: то же, что для Chrome
+- `Opera`: то же, что для Chrome
+
+### Если всё же хочется использовать скрипт проекта
+
+В проекте остаётся вспомогательный скрипт для импорта/экспорта cookies:
+
+```bash
+npm run cookies:export
+
+# Или сразу указать Firefox и файл
+node export-cookies.js --browser firefox --output cookies/youtube.txt
+
+# Или импортировать уже готовый Netscape cookies.txt
+node export-cookies.js --import C:\path\to\cookies.txt --output cookies/youtube.txt
+```
+
+Этот скрипт:
+- спросит нужный браузер, если не передать `--browser`
+- для Firefox вызовет `yt-dlp --cookies-from-browser ... --cookies ...`
+- для Edge/Chrome на Windows предложит импортировать уже готовый Netscape cookies.txt вместо неработающего прямого чтения
+- сохранит cookies в файл Netscape-формата
+- подскажет, что прописать в `config.json`
+
+После успешного экспорта рекомендуется переключить конфиг на файл:
+
+```json
+{
+  "ytDlpOptions": {
+    "cookiesFromBrowser": "",
+    "cookiesFile": "cookies\\youtube.txt"
+  }
+}
+```
 
 ## Логирование
 
@@ -207,6 +323,7 @@ Get-Content logs/2026-03-24_14-30-45.log -Tail 50
 
 **Каждый лог содержит:**
 - Время запуска скрипта
+- Полный сырой вывод `yt-dlp` по трекам и плейлистам
 - Список загруженных артистов
 - Поиск Topic-каналов (со статусом: точный/частичный/резервный)
 - Загрузку альбомов с прогрессом
@@ -280,7 +397,7 @@ Music/
 
 ## Вывод команды
 
-Во время выполнения в консоль выводится прогресс, а в файл `download.log` записываются все детали:
+Во время выполнения в консоль выводится прогресс, а в файл из папки `logs/` записываются все детали, включая сырой вывод `yt-dlp`:
 
 - Поиск Topic-канала (с указанием приоритета)
 - Сбор плейлистов (из вкладок Releases, Playlists)
@@ -336,6 +453,46 @@ choco install yt-dlp
    }
    ```
 4. После разблокировки IP запустите снова — скрипт продолжит с того же места
+
+### ⚠️ YouTube: "Sign in to confirm you're not a bot"
+
+**Причина**: YouTube требует авторизованную сессию или cookies браузера.
+
+**Решение**:
+1. Самый простой путь: вручную экспортировать Netscape `cookies.txt` из браузера и прописать `cookiesFile`
+   ```json
+   {
+     "ytDlpOptions": {
+     "cookiesFromBrowser": "",
+     "cookiesFile": "cookies\\youtube.txt"
+     }
+   }
+   ```
+2. Если используешь Firefox, можешь попробовать `cookiesFromBrowser: "firefox"`
+3. Для Edge/Chrome/Brave/Vivaldi/Opera на Windows предпочитай только `cookiesFile`
+4. Скрипт теперь останавливает текущий `yt-dlp` сразу после такой ошибки, пишет её в лог и не тратит запросы на остальные треки плейлиста
+5. После настройки cookies перезапусти downloader
+
+### ⚠️ `Could not copy Chrome cookie database`
+
+**Причина**: на Windows прямое чтение cookies из Chromium-браузеров (`edge`, `chrome`, `brave` и т.д.) через yt-dlp часто ломается.
+
+**Решение**:
+1. Не использовать `cookiesFromBrowser` для Chromium на Windows
+2. Либо перейти на Firefox и указать `cookiesFromBrowser: "firefox"`
+3. Либо экспортировать cookies в Netscape `cookies.txt` и использовать:
+   ```json
+   {
+     "ytDlpOptions": {
+       "cookiesFromBrowser": "",
+       "cookiesFile": "cookies\\youtube.txt"
+     }
+   }
+   ```
+4. Для импорта готового файла используй:
+   ```bash
+   node export-cookies.js --import C:\path\to\cookies.txt --output cookies/youtube.txt
+   ```
 
 ### ⚠️ Много пустых папок альбомов
 
