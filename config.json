@@ -36,14 +36,14 @@
   "ytDlpOptions": {
     "quiet": false,
     "noWarnings": false,
-    "socketTimeout": 20,
+    "socketTimeout": 30,
     "ignoreerrors": true,
-    "sleepRequests": 0.25,
-    "sleepInterval": 0.25,
-    "maxSleepInterval": 1.0,
-    "retries": 5,
-    "extractorRetries": 5,
-    "retrySleep": 0.5
+    "sleepRequests": 2,
+    "sleepInterval": 3,
+    "maxSleepInterval": 10,
+    "retries": 10,
+    "extractorRetries": 10,
+    "retrySleep": 5
   },
   "logging": {
     "logFile": "download.log",
