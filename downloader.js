@@ -89,7 +89,14 @@ const config = loadConfig('config.json');
 class Logger {
   constructor(logFile) {
     this.logFile = logFile;
-    this.stream = fs.createWriteStream(logFile, { flags: 'a', encoding: 'utf-8' });
+    
+    // Создаем папку логов если её нет
+    const logDir = path.dirname(logFile);
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    
+    this.stream = fs.createWriteStream(logFile, { flags: 'w', encoding: 'utf-8' });
   }
 
   log(level, message) {
@@ -105,7 +112,23 @@ class Logger {
   debug(msg) { this.log('DEBUG', msg); }
 }
 
-const logger = new Logger(config.logging.logFile);
+function generateLogFileName() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const seconds = String(now.getSeconds()).padStart(2, '0');
+  
+  const timestamp = `${year}-${month}-${day}_${hours}-${minutes}-${seconds}`;
+  const logsDir = path.join(path.dirname(config.logging.logFile || './download.log'), 'logs');
+  const logFile = path.join(logsDir, `${timestamp}.log`);
+  
+  return logFile;
+}
+
+const logger = new Logger(generateLogFileName());
 
 function toPositiveNumber(value) {
   const n = Number(value);
@@ -139,6 +162,10 @@ function buildYtDlpCommonArgs() {
   if (opts.sleepRequests) args.push('--sleep-requests', String(opts.sleepRequests));
   if (opts.sleepInterval) args.push('--sleep-interval', String(opts.sleepInterval));
   if (opts.maxSleepInterval) args.push('--max-sleep-interval', String(opts.maxSleepInterval));
+  
+  // Гарантированная минимальная задержка между запросами для упрощения rate-limit
+  args.push('--min-sleep-interval', '0.5');
+  
   if (opts.retries) args.push('--retries', String(opts.retries));
   if (opts.extractorRetries) args.push('--extractor-retries', String(opts.extractorRetries));
   if (opts.retrySleep) args.push('--retry-sleep', String(opts.retrySleep));
@@ -412,9 +439,54 @@ function downloadFile(url, filePath) {
 }
 
 /**
- * Скачивает плейлисты с фильтром
+ * Скачивает плейлисты с фильтром и автоматическим retry при rate-limit ошибках
  */
 async function downloadPlaylistUrls(artistName, playlistUrls) {
+  const MAX_RETRIES = 3;
+  const BASE_DELAY_MS = 5000; // 5 секунд
+  
+  let attempt = 0;
+  
+  while (attempt < MAX_RETRIES) {
+    attempt++;
+    
+    if (attempt > 1) {
+      const delayMs = BASE_DELAY_MS * Math.pow(2, attempt - 2);
+      const delaySec = Math.round(delayMs / 1000);
+      logger.warn(`Попытка ${attempt}/${MAX_RETRIES} для ${artistName} через ${delaySec} сек...`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    } else {
+      logger.debug(`Начало скачивания плейлистов для ${artistName} (попытка ${attempt}/${MAX_RETRIES})`);
+    }
+    
+    const result = await downloadPlaylistUrlsOnce(artistName, playlistUrls);
+    
+    if (result.success) {
+      if (attempt > 1) {
+        logger.info(`✓ Успешно загружено на попытке ${attempt}/${MAX_RETRIES}`);
+      }
+      return true;
+    }
+    
+    if (result.isRateLimit && attempt < MAX_RETRIES) {
+      logger.warn(`Rate-limit обнаружен, переопробую (${attempt}/${MAX_RETRIES})...`);
+      continue;
+    }
+    
+    if (attempt === MAX_RETRIES) {
+      logger.error(`✗ Не удалось загрузить ${artistName} после ${MAX_RETRIES} попыток`);
+      return false;
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Одна попытка скачивания плейлистов
+ * @returns {Object} { success: boolean, isRateLimit: boolean }
+ */
+async function downloadPlaylistUrlsOnce(artistName, playlistUrls) {
   const safeArtist = sanitizePath(artistName);
   const baseDir = path.join(config.outputDir, safeArtist);
 
@@ -446,6 +518,9 @@ async function downloadPlaylistUrls(artistName, playlistUrls) {
   ytDlpArgs.push(...playlistUrls);
 
   return new Promise((resolve) => {
+    let stderrOutput = '';
+    let isRateLimited = false;
+    
     const proc = spawn('yt-dlp', ytDlpArgs);
 
     proc.stdout.on('data', (data) => {
@@ -453,15 +528,25 @@ async function downloadPlaylistUrls(artistName, playlistUrls) {
     });
 
     proc.stderr.on('data', (data) => {
-      console.log(data.toString());
+      const output = data.toString();
+      stderrOutput += output;
+      console.log(output);
+      
+      // Проверяем на rate-limit ошибку
+      if (output.includes('rate-limited') || output.includes('rate limit')) {
+        isRateLimited = true;
+      }
     });
 
     proc.on('close', (code) => {
-      if (code === 0 || code === 1) {
-        // yt-dlp часто возвращает 1 даже при частичном успехе
-        resolve(true);
+      const success = code === 0 || code === 1;
+      
+      if (!success && isRateLimited) {
+        resolve({ success: false, isRateLimit: true });
+      } else if (success) {
+        resolve({ success: true, isRateLimit: false });
       } else {
-        resolve(false);
+        resolve({ success: false, isRateLimit: false });
       }
     });
   });
@@ -643,6 +728,7 @@ async function downloadDiscography(artistName) {
 async function main() {
   logger.info('==================================================');
   logger.info('Запуск загрузчика дискографии');
+  logger.info(`Логфайл: ${logger.logFile}`);
   logger.info('==================================================');
 
   // Чтение списка артистов (приоритет: config > файл)

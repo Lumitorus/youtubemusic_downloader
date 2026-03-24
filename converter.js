@@ -154,34 +154,38 @@ async function main() {
   }
 
   const allFiles = walkFilesRecursively(outputDir);
-  const mp3Files = allFiles.filter((filePath) => filePath.toLowerCase().endsWith('.mp3'));
+  const audioExtensions = ['.mp3', '.m4a', '.flac', '.wav', '.aac', '.ogg', '.wma'];
+  const audioFiles = allFiles.filter((filePath) => {
+    const ext = path.extname(filePath).toLowerCase();
+    return audioExtensions.includes(ext);
+  });
 
-  console.log(`Found MP3 files: ${mp3Files.length}`);
-  if (!mp3Files.length) return;
+  console.log(`Found audio files: ${audioFiles.length}`);
+  if (!audioFiles.length) return;
 
   let converted = 0;
   let skipped = 0;
   let failed = 0;
-  let cleanedMp3 = 0;
+  let cleanedSource = 0;
 
-  for (let i = 0; i < mp3Files.length; i++) {
-    const inputPath = mp3Files[i];
-    const outputPath = inputPath.replace(/\.mp3$/i, '.opus');
+  for (let i = 0; i < audioFiles.length; i++) {
+    const inputPath = audioFiles[i];
+    const outputPath = inputPath.replace(/\.[^.]+$/, '.opus');
 
     if (fs.existsSync(outputPath)) {
       if (!hasUsableOutput(outputPath)) {
-        console.log(`[${i + 1}/${mp3Files.length}] Reconvert (invalid opus): ${outputPath}`);
+        console.log(`[${i + 1}/${audioFiles.length}] Reconvert (invalid opus): ${outputPath}`);
       } else {
         if (flags.dryRun) {
-          console.log(`[${i + 1}/${mp3Files.length}] Cleanup planned (opus exists): ${inputPath}`);
+          console.log(`[${i + 1}/${audioFiles.length}] Cleanup planned (opus exists): ${inputPath}`);
         } else {
           try {
             fs.unlinkSync(inputPath);
-            cleanedMp3++;
-            console.log(`[${i + 1}/${mp3Files.length}] Removed MP3 (opus exists): ${inputPath}`);
+            cleanedSource++;
+            console.log(`[${i + 1}/${audioFiles.length}] Removed source file (opus exists): ${inputPath}`);
           } catch (err) {
             failed++;
-            console.error(`Failed to remove MP3: ${inputPath}`);
+            console.error(`Failed to remove source file: ${inputPath}`);
             console.error(err.message);
             continue;
           }
@@ -192,7 +196,7 @@ async function main() {
       }
     }
 
-    console.log(`[${i + 1}/${mp3Files.length}] Convert: ${inputPath}`);
+    console.log(`[${i + 1}/${audioFiles.length}] Convert: ${inputPath}`);
 
     if (flags.dryRun) {
       converted++;
@@ -217,7 +221,7 @@ async function main() {
   console.log(`Converted: ${converted}`);
   console.log(`Skipped: ${skipped}`);
   console.log(`Failed: ${failed}`);
-  console.log(`Cleaned existing MP3: ${cleanedMp3}`);
+  console.log(`Cleaned existing source files: ${cleanedSource}`);
   console.log(`Delete source: ${flags.deleteSource ? 'yes' : 'no'}`);
   console.log('========================================');
 }
