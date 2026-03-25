@@ -16,6 +16,9 @@
 - ✅ Конвертация любых аудиоформатов (MP3, M4A, FLAC, WAV, AAC, OGG, WMA) → OPUS
 - ✅ Автоматический retry при YouTube rate-limit ошибках (до 3 попыток с экспоненциальной задержкой)
 - ✅ Удаление пустых папок альбомов после неудачных загрузок
+- ✅ Preflight-проверка доступа к YouTube перед стартом батча
+- ✅ Принудительная остановка yt-dlp при bot-check (через `taskkill /T` на Windows — убивает всё дерево процессов)
+- ✅ Диагностический скрипт с двумя режимами: быстрая проверка и стресс-тест по URL из логов
 
 ## Требования
 
@@ -62,6 +65,8 @@ choco install nodejs ffmpeg yt-dlp
     "ignoreerrors": true,
     "cookiesFromBrowser": "",
     "cookiesFile": "cookies\\youtube.txt",
+    "preflightAuthCheck": true,
+    "preflightFailAction": "stop",
     "sleepRequests": 2,
     "sleepInterval": 3,
     "maxSleepInterval": 10,
@@ -76,6 +81,8 @@ choco install nodejs ffmpeg yt-dlp
 - `socketTimeout` — таймаут соединения (сек)
 - `cookiesFromBrowser` — прямое чтение cookies из браузера. Практически имеет смысл в основном для Firefox
 - `cookiesFile` — путь к Netscape `cookies.txt`. Это основной и рекомендуемый вариант
+- `preflightAuthCheck` — перед запуском батча делает быструю проверку доступа к YouTube
+- `preflightFailAction` — что делать при провале preflight (`stop` или `continue`)
 - `sleepRequests` — задержка между HTTP запросами (сек)
 - `sleepInterval` — задержка между видео в плейлисте (сек)
 - `maxSleepInterval` — максимальная задержка (сек)
@@ -151,6 +158,13 @@ npm start
 node downloader.js
 ```
 
+> ⚠️ **PowerShell**: использует `npm.cmd` вместо `npm`, иначе PowerShell выдаст ошибку политики выполнения:
+> ```
+> npm.cmd run diag:auth
+> npm.cmd run cookies:export
+> ```
+> В `cmd.exe` и терминале VS Code оба варианта работают.
+
 ### Конвертация в OPUS (любые форматы → OPUS)
 
 Скрипт `converter.js` конвертирует все поддерживаемые форматы (MP3, M4A, FLAC, WAV, AAC, OGG, WMA) в OPUS:
@@ -186,6 +200,60 @@ node cleanup-empty-dirs.js
 - Удаляет пустые папки артистов (если нет альбомов)
 - Выводит статистику удаленных папок
 
+### Диагностика cookies/IP перед большим батчем
+
+Перед запуском 100+ артистов имеет смысл проверить, доступен ли YouTube в принципе.
+
+> ⚠️ **Важно**: одиночная быстрая проба может показать OK, а батч всё равно упадет в bot-check.  
+> Это нормально: YouTube включает динамический антибот только на серии запросов подряд.  
+> Для точной диагностики используй **стресс-режим** по реальным URL из логов.
+
+#### Быстрая проверка (1 тестовый URL)
+
+```bash
+npm.cmd run diag:auth
+```
+
+Проверяет один URL с cookies и один без. Подходит только как предварительная проверка «работает ли сеть вообще».
+
+#### Стресс-проверка с cookies (по URL из последних логов)
+
+```bash
+npm.cmd run diag:auth:stress
+```
+
+Берёт до 10 реальных видео-URL из последних логов и гоняет их всех с cookies. Именно этот режим ловит интермиттирующий bot-check.
+
+#### Полная стресс-проверка (с cookies и без)
+
+```bash
+npm.cmd run diag:auth:stress:full
+```
+
+Запускает те же URL **и** с cookies, **и** без. Это позволяет точно разделить два разных сценария:
+
+| Стресс с cookies | Стресс без cookies | Вывод |
+|---|---|---|
+| OK | OK | Всё работает |
+| FAIL (bot-check) | OK | Проблема в качестве/формате cookies |
+| FAIL (bot-check) | FAIL (bot-check) | **Ограничение по IP/сети**, cookies тут ни при чём |
+| FAIL (cookie-error) | — | Файл cookies не читается (путь/права) |
+
+#### Альтернатива через node напрямую
+
+```bash
+# Базовая проверка
+node diagnose-auth.js
+
+# Стресс-проверка, 15 URL
+node diagnose-auth.js --mode stress --sample-size 15 --only-auth
+
+# С указанием конкретного лога
+node diagnose-auth.js --mode stress --sample-size 10 --log-file logs/2026-03-24_22-17-46.log
+```
+
+> ⚠️ **PowerShell**: используй `npm.cmd`, а не `npm` — иначе PowerShell выдаст ошибку политики выполнения скриптов.
+
 ## Структура проекта
 
 ```
@@ -194,6 +262,7 @@ youtubemusic_downloader/
 ├── converter.js           # Конвертер аудио (MP3/M4A/FLAC/etc → OPUS)
 ├── cleanup-empty-dirs.js  # Удаление пустых папок альбомов
 ├── export-cookies.js      # Экспорт cookies из браузера в файл для yt-dlp
+├── diagnose-auth.js       # Диагностика bot-check: cookies vs IP/сеть
 ├── config.json            # Конфигурация проекта
 ├── package.json
 ├── README.md
@@ -211,7 +280,10 @@ youtubemusic_downloader/
 | downloader.js | `node downloader.js` | Загрузка дискографии артистов с YouTube |
 | converter.js | `node converter.js --delete-source` | Конвертация аудио в OPUS |
 | cleanup-empty-dirs.js | `node cleanup-empty-dirs.js` | Удаление пустых папок альбомов |
-| export-cookies.js | `npm run cookies:export` | Экспорт cookies из браузера в Netscape-файл |
+| export-cookies.js | `npm.cmd run cookies:export` | Экспорт cookies из браузера в Netscape-файл |
+| diagnose-auth.js | `npm.cmd run diag:auth` | Быстрая проверка доступа к YouTube |
+| diagnose-auth.js | `npm.cmd run diag:auth:stress` | Стресс-тест по URL из логов (с cookies) |
+| diagnose-auth.js | `npm.cmd run diag:auth:stress:full` | Полное сравнение: с cookies vs без cookies |
 
 ### Экспорт cookies в файл
 
@@ -456,22 +528,64 @@ choco install yt-dlp
 
 ### ⚠️ YouTube: "Sign in to confirm you're not a bot"
 
-**Причина**: YouTube требует авторизованную сессию или cookies браузера.
+**Причина**: YouTube требует авторизованную сессию. Проявляется при серии запросов, не обязательно с первого.
 
-**Решение**:
-1. Самый простой путь: вручную экспортировать Netscape `cookies.txt` из браузера и прописать `cookiesFile`
+**Важно понять**: быстрая диагностика (`diag:auth`) может показать OK, а батч всё равно упадет.  
+Это потому что YouTube включает антибот только на потоке запросов, но не на одиночном.
+
+**Шаг 1 — диагностика: куки или IP?**
+
+```bash
+npm.cmd run diag:auth:stress:full
+```
+
+Смотри на результат:
+
+| Результат | Что это значит | Что делать |
+|---|---|---|
+| Стресс с cookies: OK | Cookies работают нормально | Проблема могла быть временной, пробуй батч |
+| Стресс с cookies: FAIL, без cookies: OK | Плохие/конфликтные cookies | Перегенерировать cookies (п.2 ниже) |
+| Стресс с cookies: FAIL, без cookies: FAIL | **Ограничение по IP** | Сменить сеть/IP (п.3 ниже) |
+
+**Шаг 2 — если проблема в cookies:**
+
+1. Открой YouTube в браузере, убедись что залогинен
+2. Экспортируй cookies расширением `Get cookies.txt LOCALLY`
+3. Сохрани как `cookies/youtube.txt`
+4. Убедись в конфиге:
    ```json
    {
      "ytDlpOptions": {
-     "cookiesFromBrowser": "",
-     "cookiesFile": "cookies\\youtube.txt"
+       "cookiesFromBrowser": "",
+       "cookiesFile": "cookies\\youtube.txt"
      }
    }
    ```
-2. Если используешь Firefox, можешь попробовать `cookiesFromBrowser: "firefox"`
-3. Для Edge/Chrome/Brave/Vivaldi/Opera на Windows предпочитай только `cookiesFile`
-4. Скрипт теперь останавливает текущий `yt-dlp` сразу после такой ошибки, пишет её в лог и не тратит запросы на остальные треки плейлиста
-5. После настройки cookies перезапусти downloader
+5. Перезапусти стресс-тест — он должен показать OK
+6. Для Firefox можно попробовать `cookiesFromBrowser: "firefox"` (на Windows без Edge/Chrome/Brave)
+
+**Шаг 3 — если проблема в IP/сети:**
+
+Cookies тут не помогут. YouTube ограничивает именно твой IP для серии запросов.
+
+Варианты:
+- Сменить сеть (мобильный хотспот / VPN)
+- Подождать 1–2 часа и попробовать снова
+- Увеличить паузы в `config.json`:
+  ```json
+  {
+    "ytDlpOptions": {
+      "sleepRequests": 4,
+      "sleepInterval": 5,
+      "maxSleepInterval": 15
+    }
+  }
+  ```
+
+**Что делает скрипт при bot-check:**
+- Немедленно останавливает yt-dlp (через `taskkill /F /T` на Windows — убивает **всё дерево процессов**, не только лаунчер)
+- Логирует ошибку и текущий режим авторизации
+- Останавливает весь батч, чтобы не тратить запросы впустую
 
 ### ⚠️ `Could not copy Chrome cookie database`
 

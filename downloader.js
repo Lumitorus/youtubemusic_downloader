@@ -158,7 +158,9 @@ function getYtDlpRuntimeOptions() {
     extractorRetries: toPositiveNumber(opts.extractorRetries),
     retrySleep: toPositiveNumber(opts.retrySleep),
     cookiesFromBrowser: typeof opts.cookiesFromBrowser === 'string' ? opts.cookiesFromBrowser.trim() : '',
-    cookiesFile: typeof opts.cookiesFile === 'string' ? opts.cookiesFile.trim() : ''
+    cookiesFile: typeof opts.cookiesFile === 'string' ? opts.cookiesFile.trim() : '',
+    preflightAuthCheck: opts.preflightAuthCheck !== false,
+    preflightFailAction: typeof opts.preflightFailAction === 'string' ? opts.preflightFailAction.trim().toLowerCase() : 'stop'
   };
 }
 
@@ -276,6 +278,78 @@ function runYtDlpFlatJson(target, runtimeOverrides = {}) {
 
     throw ytDlpError;
   }
+}
+
+function runYtDlpProbe(runtimeOverrides = {}) {
+  // Короткая проверка доступа к YouTube API/странице видео без скачивания,
+  // чтобы заранее понять источник проблем (cookies vs сеть/IP).
+  const probeUrl = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
+  const args = [
+    ...buildYtDlpCommonArgs(runtimeOverrides),
+    '--skip-download',
+    '--no-playlist',
+    '--print',
+    'id',
+    probeUrl
+  ];
+
+  try {
+    execFileSync('yt-dlp', args, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+    return { ok: true, issue: detectYtDlpProtection('') };
+  } catch (err) {
+    const output = [err.stdout, err.stderr]
+      .filter((value) => typeof value === 'string' && value.length > 0)
+      .join('\n');
+    const issue = detectYtDlpProtection(output || err.message);
+
+    return {
+      ok: false,
+      issue,
+      output: output || err.message
+    };
+  }
+}
+
+function diagnoseYouTubeAuthReadiness() {
+  const opts = getYtDlpRuntimeOptions();
+
+  if (!opts.preflightAuthCheck) {
+    return { ok: true, skipped: true, shouldStop: false };
+  }
+
+  logger.info('Проверка доступа к YouTube перед основным батчем...');
+
+  const withAuth = runYtDlpProbe({ disableAuth: false });
+  if (withAuth.ok) {
+    logger.info('Preflight: доступ с текущей авторизацией подтвержден.');
+    return { ok: true, skipped: false, shouldStop: false };
+  }
+
+  if (withAuth.issue.isCookieAccessError) {
+    logger.warn('Preflight: yt-dlp не смог использовать cookies из браузера/файла.');
+    logger.warn('Проверь путь cookiesFile, права доступа к файлу и что файл не пустой/корректный.');
+  }
+
+  const withoutAuth = runYtDlpProbe({ disableAuth: true });
+
+  if (!withoutAuth.ok && (withAuth.issue.isBotCheck || withoutAuth.issue.isBotCheck)) {
+    logger.error('Preflight: YouTube режет даже тестовый запрос (бот-проверка). Вероятна проблема IP/сети/репутации сессии, а не только cookies.');
+    logger.error('Рекомендации: сменить IP/сеть, уменьшить параллелизм внешних запросов, перегенерировать cookies и повторить позже.');
+  } else if (withAuth.issue.isBotCheck && withoutAuth.ok) {
+    logger.error('Preflight: без cookies запрос проходит, а с cookies падает в bot-check. Вероятно cookies некорректны для текущей сессии YouTube.');
+    logger.error('Рекомендации: экспортировать cookies заново из того же аккаунта YouTube и убедиться, что в файле есть youtube/google домены.');
+  } else {
+    logger.warn('Preflight: тест с текущими настройками не прошел. Подробности в логе yt-dlp выше.');
+  }
+
+  const shouldStop = opts.preflightFailAction !== 'continue';
+  if (shouldStop) {
+    logger.error('Preflight не пройден. Останавливаю запуск (preflightFailAction=stop).');
+  } else {
+    logger.warn('Preflight не пройден, но продолжаю по настройке preflightFailAction=continue.');
+  }
+
+  return { ok: false, skipped: false, shouldStop };
 }
 
 function normalizeArtists(rawArtists) {
@@ -641,6 +715,7 @@ async function downloadPlaylistUrlsOnce(artistName, playlistUrls, runtimeOverrid
     let isBotCheck = false;
     let isCookieAccessError = false;
     let abortRequested = false;
+    const DETECTION_TAIL_SIZE = 6000;
     
     const proc = spawn('yt-dlp', ytDlpArgs);
 
@@ -649,7 +724,11 @@ async function downloadPlaylistUrlsOnce(artistName, playlistUrls, runtimeOverrid
       combinedOutput += output;
       writeChildOutput(output, isErrorStream);
 
-      const issue = detectYtDlpProtection(output);
+      // Смотрим не только текущий chunk, но и хвост накопленного вывода,
+      // чтобы ловить фразы вроде "Sign in to confirm you're not a bot",
+      // которые могут прийти разбитыми на несколько событий data.
+      const detectionInput = combinedOutput.slice(-DETECTION_TAIL_SIZE);
+      const issue = detectYtDlpProtection(detectionInput);
       if (issue.isRateLimit) {
         isRateLimited = true;
       }
@@ -663,7 +742,18 @@ async function downloadPlaylistUrlsOnce(artistName, playlistUrls, runtimeOverrid
       if (!abortRequested && (issue.isRateLimit || issue.isBotCheck || issue.isCookieAccessError)) {
         abortRequested = true;
         logger.warn('Обнаружена защитная ошибка YouTube. Останавливаю текущий запуск yt-dlp, чтобы не продолжать остальные треки плейлиста.');
-        proc.kill();
+        try {
+          if (process.platform === 'win32') {
+            // На Windows proc.kill() убивает только родительский процесс (лаунчер),
+            // дочерний Python продолжает работу. taskkill /T убивает всё дерево.
+            execFileSync('taskkill', ['/F', '/T', '/PID', String(proc.pid)], { stdio: 'ignore' });
+          } else {
+            proc.kill('SIGKILL');
+          }
+        } catch (_killErr) {
+          // Процесс мог уже завершиться сам — игнорируем ошибку kill
+          proc.kill();
+        }
       }
     }
 
@@ -747,6 +837,35 @@ function hasAnyArtistAudioInOutputDir(artistName) {
   }
 
   return false;
+}
+
+/**
+ * Предварительно отфильтровывает артистов, уже присутствующих в outputDir.
+ * Это уменьшает лишние итерации и шум в логах при skipByOutputDirOnly=true.
+ */
+function prefilterArtistsByOutputDir(artists) {
+  if (config.forceRedownload || config.skipByOutputDirOnly !== true) {
+    return {
+      artistsToProcess: artists,
+      skippedArtists: []
+    };
+  }
+
+  const artistsToProcess = [];
+  const skippedArtists = [];
+
+  for (const artist of artists) {
+    if (hasAnyArtistAudioInOutputDir(artist)) {
+      skippedArtists.push(artist);
+    } else {
+      artistsToProcess.push(artist);
+    }
+  }
+
+  return {
+    artistsToProcess,
+    skippedArtists
+  };
 }
 
 /**
@@ -892,6 +1011,14 @@ async function main() {
   logger.info(`yt-dlp auth: ${getYtDlpAuthSummary()}`);
   logger.info('==================================================');
 
+  const preflight = diagnoseYouTubeAuthReadiness();
+  if (preflight.shouldStop) {
+    logger.info('\n' + '==================================================');
+    logger.info('Результаты: запуск остановлен на preflight-проверке');
+    logger.info('==================================================');
+    return;
+  }
+
   // Чтение списка артистов (приоритет: config > файл)
   let artists = [];
 
@@ -914,12 +1041,30 @@ async function main() {
 
   logger.info(`Найдено артистов: ${artists.length}`);
 
+  const { artistsToProcess, skippedArtists } = prefilterArtistsByOutputDir(artists);
+
+  if (skippedArtists.length > 0) {
+    logger.info(
+      `Предварительный пропуск по outputDir: ${skippedArtists.length} артистов (режим skipByOutputDirOnly=true)`
+    );
+  }
+
+  if (!artistsToProcess.length) {
+    logger.info('После предварительного фильтра не осталось артистов для обработки.');
+    logger.info('\n' + '==================================================');
+    logger.info(`Результаты: 0 успешно, 0 ошибок, ${skippedArtists.length} пропущено`);
+    logger.info('==================================================');
+    return;
+  }
+
+  logger.info(`К обработке после фильтра: ${artistsToProcess.length}`);
+
   let successful = 0;
   let failed = 0;
 
-  for (let i = 0; i < artists.length; i++) {
-    const artist = artists[i];
-    logger.info(`\n[${i + 1}/${artists.length}] Обработка: ${artist}`);
+  for (let i = 0; i < artistsToProcess.length; i++) {
+    const artist = artistsToProcess[i];
+    logger.info(`\n[${i + 1}/${artistsToProcess.length}] Обработка: ${artist}`);
     try {
       if (await downloadDiscography(artist)) {
         successful++;
@@ -939,7 +1084,7 @@ async function main() {
   }
 
   logger.info('\n' + '==================================================');
-  logger.info(`Результаты: ${successful} успешно, ${failed} ошибок`);
+  logger.info(`Результаты: ${successful} успешно, ${failed} ошибок, ${skippedArtists.length} пропущено на старте`);
   logger.info('==================================================');
 }
 

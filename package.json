@@ -7,7 +7,10 @@
     "start": "node downloader.js",
     "dev": "node downloader.js",
     "convert:opus": "node converter.js",
-    "cookies:export": "node export-cookies.js"
+    "cookies:export": "node export-cookies.js",
+    "diag:auth": "node diagnose-auth.js",
+    "diag:auth:stress": "node diagnose-auth.js --mode stress --sample-size 10 --only-auth",
+    "diag:auth:stress:full": "node diagnose-auth.js --mode stress --sample-size 10"
   },
   "keywords": ["youtube", "music", "downloader", "lidarr"],
   "author": "",
