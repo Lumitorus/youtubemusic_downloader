@@ -1,4 +1,5 @@
 # Папки с загруженной музыкой
+Youtube Music/
 Music/
 music/
 old/
@@ -9,6 +10,8 @@ download.log
 logs/
 cookies/
 Мне нравится.txt
+tmp_marker_do_not_commit.txt
+docs/
 
 # Node.js
 node_modules/

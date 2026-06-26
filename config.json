@@ -5,14 +5,17 @@
     "outputDir": "Папка, куда сохраняются артист/альбом/треки",
     "forceRedownload": "Если true, переза́гружает даже если уже скачано. Если false, пропускает существующих",
     "ytDlpOptions": "Опции yt-dlp на уровне проекта: задержки/ретраи/cookies для снижения риска rate-limit и антибот-проверок",
-    "skipByOutputDirOnly": "Если true и forceRedownload=false: пропускать артиста по наличию аудио в outputDir без проверки через yt-dlp"
+    "skipByOutputDirOnly": "Если true и forceRedownload=false: пропускать артиста по наличию аудио в outputDir без проверки через yt-dlp",
+    "youtubeStrategy": "Стратегия обхода YouTube anti-bot: auto = default -> mweb -> mweb+cookies",
+    "proxyUrl": "Прокси для yt-dlp. Примеры: http://192.168.0.197:3128, socks5://127.0.0.1:1080. Можно указать просто 192.168.0.197:3128",
+    "sourceAddress": "Опционально: исходящий IP/интерфейс для yt-dlp (если нужно закрепить конкретный адрес)"
   },
   "forceRedownload": false,
   "skipByOutputDirOnly": true,
   "artists": [
+    "earlyriseband"
   ],
   "artistsFile": "Мне нравится.txt",
-  "outputDir": "M:\\Youtube",
   "audioFormat": "opus",
   "audioQuality": "96K",
   "blockedKeywords": [
@@ -41,11 +44,22 @@
     "cookiesFromBrowser": "",
     "cookiesFile": "cookies/youtube.txt",
     "sleepRequests": 2,
-    "sleepInterval": 3,
+    "sleepInterval": 5,
     "maxSleepInterval": 10,
     "retries": 10,
     "extractorRetries": 10,
     "retrySleep": 5
+    ,"proxyUrl": "http://192.168.0.197:3128"
+    ,"sourceAddress": ""
+  },
+  "youtubeStrategy": {
+    "mode": "auto",
+    "useMweb": true,
+    "cookiesFallback": true,
+    "maxAttemptsPerProfile": 2,
+    "maxConsecutiveBlocks": 5,
+    "backoffBaseSeconds": 30,
+    "backoffMaxSeconds": 240
   },
   "logging": {
     "logFile": "download.log",
